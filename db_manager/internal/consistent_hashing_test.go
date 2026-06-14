@@ -231,8 +231,6 @@ func TestGetReplicaNodes_OwnershipShiftOnAdd(t *testing.T) {
 		newReplicas := h.GetReplicaNodes(key, 2)
 		if newReplicas[0] != before[key].primary {
 			shifted++
-			if newReplicas[0] != "server-3" && newReplicas[1] != "server-3" {
-			}
 		}
 	}
 

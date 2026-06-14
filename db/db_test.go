@@ -19,7 +19,7 @@ func setupTestDB(t *testing.T) *Database {
 	}
 
 	t.Cleanup(func() {
-		db.Cleanup()
+		_ = db.Cleanup()
 	})
 
 	return db
@@ -68,8 +68,8 @@ func TestGetKey_NotFound(t *testing.T) {
 func TestSetKey_Overwrite(t *testing.T) {
 	db := setupTestDB(t)
 
-	db.SetKey("key", "value1")
-	db.SetKey("key", "value2")
+	_ = db.SetKey("key", "value1")
+	_ = db.SetKey("key", "value2")
 
 	val, err := db.GetKey("key")
 	if err != nil {
@@ -83,7 +83,7 @@ func TestSetKey_Overwrite(t *testing.T) {
 func TestDeleteKey(t *testing.T) {
 	db := setupTestDB(t)
 
-	db.SetKey("key", "value")
+	_ = db.SetKey("key", "value")
 
 	err := db.DeleteKey("key")
 	if err != nil {
@@ -199,7 +199,7 @@ func TestGetAllKeys(t *testing.T) {
 	}
 
 	for k, v := range expected {
-		db.SetKey(k, v)
+		_ = db.SetKey(k, v)
 	}
 
 	pairs, err := db.GetAllKeys()
@@ -224,10 +224,10 @@ func TestGetAllKeys(t *testing.T) {
 func TestGetAllKeys_AfterDelete(t *testing.T) {
 	db := setupTestDB(t)
 
-	db.SetKey("a", "1")
-	db.SetKey("b", "2")
-	db.SetKey("c", "3")
-	db.DeleteKey("b")
+	_ = db.SetKey("a", "1")
+	_ = db.SetKey("b", "2")
+	_ = db.SetKey("c", "3")
+	_ = db.DeleteKey("b")
 
 	pairs, err := db.GetAllKeys()
 	if err != nil {

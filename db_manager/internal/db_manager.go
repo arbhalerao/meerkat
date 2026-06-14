@@ -347,7 +347,7 @@ func (m *DBManager) migrateKeysOnNodeAdd(newUUID string, existingServers []dbSer
 			}
 			if !oldIsReplica {
 				ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-				oldServer.client.Delete(ctx3, &db_server.DeleteRequest{Key: pair.Key})
+				_, _ = oldServer.client.Delete(ctx3, &db_server.DeleteRequest{Key: pair.Key})
 				cancel3()
 			}
 

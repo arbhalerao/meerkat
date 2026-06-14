@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"net/http"
@@ -84,7 +85,7 @@ func (ms *ManagerServer) registerHandler(w http.ResponseWriter, r *http.Request)
 		"server_uuid": serverUUID,
 		"message":     "Server registered successfully",
 	}
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (ms *ManagerServer) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +94,7 @@ func (ms *ManagerServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 		"status": "healthy",
 		"time":   time.Now().Format(time.RFC3339),
 	}
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (ms *ManagerServer) clusterHandler(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +107,7 @@ func (ms *ManagerServer) clusterHandler(w http.ResponseWriter, r *http.Request) 
 		"servers":            servers,
 		"time":               time.Now().Format(time.RFC3339),
 	}
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (ms *ManagerServer) Start() error {
@@ -116,7 +117,7 @@ func (ms *ManagerServer) Start() error {
 
 func (ms *ManagerServer) Stop() error {
 	utils.Logger.Info().Msg("Shutting down HTTP server...")
-	return ms.httpServer.Shutdown(nil)
+	return ms.httpServer.Shutdown(context.Background())
 }
 
 func main() {
@@ -177,7 +178,7 @@ func main() {
 	utils.Logger.Info().Msg("Shutting down servers...")
 
 	grpcService.Stop()
-	httpService.Stop()
+	_ = httpService.Stop()
 
 	wg.Wait()
 

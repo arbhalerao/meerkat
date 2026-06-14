@@ -104,7 +104,7 @@ func main() {
 
 	grpcService.Stop()
 	if httpService != nil {
-		httpService.Shutdown()
+		_ = httpService.Shutdown()
 	}
 
 	wg.Wait()
