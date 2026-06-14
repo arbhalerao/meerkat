@@ -4,44 +4,15 @@
 
 A distributed key-value database built in Go, featuring consistent hashing for data distribution, data replication for fault tolerance, automatic key migration on topology changes, and gRPC for inter-node communication.
 
-Named after the meerkat — meerkats live in colonies with designated sentinels that watch over the group, much like this system's manager node that health-checks servers, coordinates the hash ring, and orchestrates key migration when nodes join or leave.
-
-Part of a trilogy of distributed systems projects:
-1. **[walrus](https://github.com/arbhalerao/walrus)** — single-node persistent KV store with WAL
-2. **[meerkat](https://github.com/arbhalerao/meerkat)** — distributed KV with consistent hashing and replication _(you are here)_
-3. **[otter](https://github.com/arbhalerao/otter)** — Raft consensus protocol from scratch
-
 ## Architecture
 
-```
-                          ┌──────────────────────────────────────────┐
-                          │              DB Manager                  │
-                          │           (Coordinator)                  │
-                          │                                          │
-                          │  ┌──────────────────────────────────┐    │
-                          │  │     Consistent Hash Ring         │    │
-┌─────────────┐  gRPC     │  │                                  │    │
-│             │──────────▶│  │   ●───●───●───●───●───●───●      │    │
-│   Client    │           │  │   S1      S2      S3             │    │
-│  (CLI Tool) │◀──────────│  │                                  │    │
-│             │           │  └──────────────────────────────────┘    │
-└─────────────┘           │                                          │
-                          │  Prometheus: /metrics                    │
-                          │  Cluster:    /cluster                    │
-                          │  gRPC:       :9090                       │
-                          │  HTTP:       :8090                       │
-                          └────────┬────────┬────────┬───────────────┘
-                                   │        │        │
-                              gRPC │   gRPC │   gRPC │
-                                   │        │        │
-                          ┌────────▼──┐ ┌───▼──────┐ ┌▼───────────┐
-                          │ DB Server │ │ DB Server│ │ DB Server  │
-                          │  (Pune)   │ │ (Mumbai) │ │(Bangalore) │
-                          │           │ │          │ │            │
-                          │ BadgerDB  │ │ BadgerDB │ │ BadgerDB   │
-                          │ :52000    │ │ :52001   │ │ :52002     │
-                          └───────────┘ └──────────┘ └────────────┘
-```
+- Distributed key-value store with a **coordinator / storage-node** split, organized as 6 independent Go modules (`db_manager`, `db_server`, `db`, `client`, `pb`, `utils`). All inter-node communication is **gRPC + Protocol Buffers**.
+- The **DB Manager** (coordinator) owns a **CRC32 consistent-hash ring** (sorted ring, `O(log n)` binary-search lookup), routes client `Set/Get/Delete`, replicates each write **synchronously to 2 successor nodes** (replication factor 2), and on reads tries the primary then fails over to replicas.
+- **DB Servers** wrap **BadgerDB** (pure-Go LSM engine) and expose a 5-method gRPC service (`Set/Get/Delete/HealthCheck/ListKeys`). Each server **self-registers** with the manager over HTTP on startup using bounded exponential backoff.
+- The manager runs **periodic gRPC health checks**, and on node join/leave performs **automatic key migration** (via `ListKeys`) and reconciles the ring. Observability via **Prometheus `/metrics`** (5 metrics) and a `/cluster` topology endpoint.
+- Ships as **Docker Compose** (1 manager + 3 storage nodes); per-node config is TOML, logging is zerolog.
+
+![Architecture](docs/arch.png)
 
 ## Features
 
@@ -60,18 +31,7 @@ Part of a trilogy of distributed systems projects:
 
 When a client writes a key, the manager hashes the key (CRC32) onto a ring of uint32 values. Each server occupies a position on the ring based on its UUID. The key is assigned to the first server whose ring position is >= the key's hash (wrapping around at the end).
 
-```
-Hash Ring (uint32 space):
-
-     0 ─────────── Server A (hash: 1000) ─────────── Server B (hash: 5000)
-     │                  ▲                                  ▲
-     │      key "user:1"│hash: 800                         │
-     │      ────────────┘                                  │
-     │                                    key "user:2"     │
-     │                                    hash: 3200       │
-     │                                    ─────────────────┘
-     └─────────────────────────────────── Server C (hash: 9000)
-```
+![Hash Ring](docs/hash-ring.png)
 
 When a new server joins, only the keys between the new server's predecessor and the new server itself need to be reassigned - not the entire keyspace.
 
@@ -80,12 +40,12 @@ When a new server joins, only the keys between the new server's predecessor and 
 With replication factor = 2, each key is stored on its primary server AND the next server clockwise on the ring:
 
 ```
-Write "user:1" → hash lands on Server A
+Write "user:1" -> hash lands on Server A
   ├─ Write to Server A (primary)      ✓
   └─ Write to Server B (replica)      ✓
 
 Read "user:1"
-  ├─ Try Server A (primary)           ✓ → return value
+  ├─ Try Server A (primary)           ✓ -> return value
   └─ Try Server B (fallback)          (only if A fails)
 ```
 
@@ -93,7 +53,7 @@ Read "user:1"
 
 When the cluster topology changes, data automatically moves to maintain correct ownership:
 
-**Node Join — Server-D joins a 3-node cluster:**
+**Node Join - Server-D joins a 3-node cluster:**
 
 ```
 Before: "user:1" hashes to Server-A, replica on Server-B
@@ -102,12 +62,12 @@ Before: "user:1" hashes to Server-A, replica on Server-B
   2. Manager adds D to hash ring
   3. Manager scans all existing servers (A, B, C) via ListKeys RPC
   4. For each key, checks new ownership on the updated ring
-  5. "user:1" now hashes to Server-D → copy to D, delete from A
+  5. "user:1" now hashes to Server-D -> copy to D, delete from A
 
 After: "user:1" lives on Server-D (primary) and Server-A (replica)
 ```
 
-**Node Leave — Server-B fails health check:**
+**Node Leave - Server-B fails health check:**
 
 ```
 Before: "user:2" lives on Server-B (primary) and Server-C (replica)
@@ -123,11 +83,11 @@ After: "user:2" lives on Server-C (primary) and Server-A (replica)
 ### Request Flow
 
 ```
-1. Client ──SET("user:1", "Alice")──▶ Manager (gRPC :9090)
-2. Manager ──hash("user:1")──▶ Ring lookup → [Server-A, Server-B]
-3. Manager ──Set RPC──▶ Server-A (primary)    ✓
-4. Manager ──Set RPC──▶ Server-B (replica)    ✓
-5. Manager ──response──▶ Client: success
+1. Client  -> SET("user:1", "Alice") -> Manager (gRPC :9090)
+2. Manager -> hash("user:1") -> Ring lookup -> [Server-A, Server-B]
+3. Manager -> Set RPC -> Server-A (primary)    ✓
+4. Manager -> Set RPC -> Server-B (replica)    ✓
+5. Manager -> response -> Client: success
 ```
 
 ## Quick Start
@@ -172,44 +132,14 @@ make bench
 make test
 ```
 
-## Benchmarks
-
-Measured on a single node (Intel Core Ultra 9 185H):
-
-### Consistent Hashing (10-node ring)
-
-| Operation             | ops/sec    | ns/op | allocs/op |
-| --------------------- | ---------- | ----- | --------- |
-| GetNode               | ~4,900,000 | 232   | 2         |
-| GetReplicaNodes (n=2) | ~2,600,000 | 455   | 5         |
-
-### BadgerDB Storage
-
-| Operation | ops/sec  | ns/op  | allocs/op |
-| --------- | -------- | ------ | --------- |
-| Set       | ~76,000  | 13,010 | 43        |
-| Get       | ~457,000 | 2,187  | 14        |
-| Delete    | ~68,000  | 14,627 | 53        |
-
-## Design Decisions
-
-| Decision       | Choice                | Why                                                                          |
-| -------------- | --------------------- | ---------------------------------------------------------------------------- |
-| Storage engine | BadgerDB              | LSM-tree based, written in pure Go, high write throughput, no CGO dependency |
-| RPC framework  | gRPC + Protobuf       | Type-safe, efficient binary serialization, bidirectional streaming support   |
-| Hash function  | CRC32                 | Fast, sufficient distribution for consistent hashing (not crypto-sensitive)  |
-| Replication    | Synchronous, factor=2 | Simple to reason about correctness; 2 copies tolerate 1 node failure         |
-| Configuration  | TOML                  | Human-readable, well-suited for static configuration files                   |
-| Logging        | Zerolog               | Zero-allocation structured logging, high performance                         |
-
 ## Observability
 
 ### Prometheus Metrics
 
 The manager exposes metrics at `GET /metrics`:
 
-| Metric                              | Type      | Description                                             |
-| ----------------------------------- | --------- | ------------------------------------------------------- |
+| Metric                             | Type      | Description                                             |
+| ---------------------------------- | --------- | ------------------------------------------------------- |
 | `meerkat_requests_total`           | Counter   | Total requests by operation (get/set/delete) and status |
 | `meerkat_request_duration_seconds` | Histogram | Request latency distribution                            |
 | `meerkat_active_servers`           | Gauge     | Number of live servers in the cluster                   |
